@@ -5,6 +5,11 @@ import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+type Experiment = {
+  id: string;
+  name: string;
+};
+
 export default function SessionPage() {
   const { loading, userId } = useAuthGuard();
   const router = useRouter();
@@ -17,16 +22,38 @@ export default function SessionPage() {
   const [selfRating, setSelfRating] = useState(7);
   const [startedAt, setStartedAt] = useState<Date | null>(null);
 
+  // NEW LAB MODE STATE
+  const [experiments, setExperiments] = useState<Experiment[]>([]);
+  const [selectedExperimentId, setSelectedExperimentId] = useState<string>("");
+  const [conditionLabel, setConditionLabel] = useState("");
+
   // countdown timer
   useEffect(() => {
     if (!running || secondsLeft <= 0) return;
-
     const interval = setInterval(() => {
       setSecondsLeft((prev) => prev - 1);
     }, 1000);
-
     return () => clearInterval(interval);
   }, [running, secondsLeft]);
+
+  // fetch experiments for Lab Mode
+  useEffect(() => {
+    if (!userId) return;
+
+    const fetchExperiments = async () => {
+      const { data, error } = await supabase
+        .from("experiments")
+        .select("id, name")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+
+      if (!error && data) {
+        setExperiments(data as Experiment[]);
+      }
+    };
+
+    fetchExperiments();
+  }, [userId]);
 
   const startSession = () => {
     if (!goal.trim()) return;
@@ -36,6 +63,7 @@ export default function SessionPage() {
     setRunning(true);
   };
 
+  // REPLACED endSession WITH AUTO-LAB-RUN
   const endSession = async () => {
     setRunning(false);
 
@@ -48,15 +76,38 @@ export default function SessionPage() {
     const diffMinutes =
       (endedAt.getTime() - startedAt.getTime()) / 1000 / 60;
 
-    await supabase.from("sessions").insert({
-      user_id: userId,
-      goal,
-      planned_duration_minutes: plannedMinutes,
-      actual_duration_minutes: Math.round(diffMinutes),
-      distractions_count: distractions,
-      self_rating: selfRating,
-      environment_used: "default_red_lofi",
-    });
+    // Save session first
+    const { data: insertedSession, error: sessionError } = await supabase
+      .from("sessions")
+      .insert({
+        user_id: userId,
+        goal,
+        planned_duration_minutes: plannedMinutes,
+        actual_duration_minutes: Math.round(diffMinutes),
+        distractions_count: distractions,
+        self_rating: selfRating,
+        environment_used: "default_red_lofi",
+      })
+      .select()
+      .single();
+
+    if (sessionError) {
+      console.error(sessionError);
+      router.push("/dashboard");
+      return;
+    }
+
+    // Auto-log experiment run
+    if (selectedExperimentId && conditionLabel.trim()) {
+      await supabase.from("experiment_runs").insert({
+        user_id: userId,
+        experiment_id: selectedExperimentId,
+        condition_label: conditionLabel,
+        minutes: Math.round(diffMinutes),
+        rating: selfRating,
+        notes: `Auto-logged from session goal: ${goal}`,
+      });
+    }
 
     router.push("/dashboard");
   };
@@ -142,6 +193,46 @@ export default function SessionPage() {
                   </div>
                 </div>
               </div>
+
+              {/* LAB MODE EXPERIMENT UI */}
+              {experiments.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  <label className="text-xs text-zinc-400">
+                    Log this block to a Lab experiment? (optional)
+                  </label>
+
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <select
+                      className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-sm focus:outline-none focus:border-fokusAccent"
+                      value={selectedExperimentId}
+                      onChange={(e) =>
+                        setSelectedExperimentId(e.target.value)
+                      }
+                    >
+                      <option value="">
+                        No experiment (just a normal session)
+                      </option>
+                      {experiments.map((exp) => (
+                        <option key={exp.id} value={exp.id}>
+                          {exp.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    <input
+                      className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-sm focus:outline-none focus:border-fokusAccent"
+                      value={conditionLabel}
+                      onChange={(e) => setConditionLabel(e.target.value)}
+                      placeholder='Condition label (e.g. "Red lamp + lofi")'
+                    />
+                  </div>
+
+                  <p className="text-[11px] text-zinc-500">
+                    If selected, FOKUS will auto-log this block as a run in Lab
+                    mode when you end the session.
+                  </p>
+                </div>
+              )}
             </div>
 
             <button
@@ -156,10 +247,12 @@ export default function SessionPage() {
             <p className="text-xs uppercase tracking-[0.2em] text-zinc-400">
               Fokus session running
             </p>
+
             <div className="text-6xl md:text-7xl font-semibold tabular-nums">
               {String(minutes).padStart(2, "0")}:
               {String(seconds).padStart(2, "0")}
             </div>
+
             <p className="max-w-xl text-center text-sm text-zinc-300">
               {goal}
             </p>

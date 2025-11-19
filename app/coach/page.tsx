@@ -1,16 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { supabase } from "@/lib/supabaseClient";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 type SessionRow = {
   id: string;
   created_at: string;
-  goal: string | null;
   actual_duration_minutes: number | null;
   self_rating: number | null;
+  distractions_count: number | null;
 };
 
 type SessionSummary = {
@@ -87,7 +87,7 @@ export default function DashboardPage() {
             </p>
           </div>
 
-          {/* ⭐ Updated nav with Insights, Lab, Coach, Sign out */}
+          {/* 🔥 REPLACED NAV BLOCK BELOW */}
           <div className="flex items-center gap-3 text-xs">
             <Link
               href="/insights"
@@ -120,6 +120,7 @@ export default function DashboardPage() {
               Sign out
             </button>
           </div>
+          {/* 🔥 END NAV BLOCK */}
         </header>
 
         <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
