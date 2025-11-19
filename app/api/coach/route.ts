@@ -36,10 +36,10 @@ The user is asking:
 
 Using concise, practical language, give them:
 - A 3–5 bullet "protocol for the next 7 days"
-- 2–3 specific environment recommendations (lighting, sound, time of day)
-- 2 short "rules" to follow during each session
+- 2–3 environment recommendations (lighting, sound, time of day)
+- 2 rules to follow during each session
 
-Avoid generic motivation quotes. Make it tactical and data-driven.
+Avoid motivational quotes. Make it tactical.
 `;
 
   try {
@@ -48,15 +48,11 @@ Avoid generic motivation quotes. Make it tactical and data-driven.
       input: prompt,
     });
 
-    // ✔ SAFE access to text (fixes your error)
-    const item: any = response.output?.[0];
-    const text =
-      item?.content?.[0]?.text ||
-      "Coach could not generate a response.";
+    const text = response.output_text; // <-- FIXED
 
     return NextResponse.json({ answer: text });
   } catch (err) {
-    console.error(err);
+    console.error("Coach API error:", err);
     return NextResponse.json(
       { error: "Failed to generate coach response." },
       { status: 500 }
