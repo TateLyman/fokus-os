@@ -36,7 +36,7 @@ Keep it tactical and based on data.
 `;
 
   try {
-    const response = await fetch(
+    const hfResponse = await fetch(
       "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
       {
         method: "POST",
@@ -44,14 +44,20 @@ Keep it tactical and based on data.
           Authorization: `Bearer ${HF_API_KEY}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          inputs: prompt,
-        }),
+        body: JSON.stringify({ inputs: prompt }),
       }
     );
 
-    if (!response.ok) {
-      const errText = await response.text();
+    // Handle model loading (free-tier cold start)
+    if (hfResponse.status === 503) {
+      return NextResponse.json(
+        { error: "Model is loading, retry in a few seconds." },
+        { status: 503 }
+      );
+    }
+
+    if (!hfResponse.ok) {
+      const errText = await hfResponse.text();
       console.error("HF ERROR:", errText);
       return NextResponse.json(
         { error: "HF model request failed." },
@@ -59,10 +65,11 @@ Keep it tactical and based on data.
       );
     }
 
-    const data = await response.json();
+    const data = await hfResponse.json();
 
+    // HF returns: [{ generated_text: "..." }]
     const text =
-      data[0]?.generated_text ||
+      data[0]?.generated_text ??
       "Coach could not generate a response.";
 
     return NextResponse.json({ answer: text });
