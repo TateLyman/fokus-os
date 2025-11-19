@@ -44,11 +44,15 @@ Avoid generic motivation quotes. Make it tactical and data-driven.
 
   try {
     const response = await client.responses.create({
-      model: "gpt-5.1-mini",
+      model: "gpt-4o-mini",
       input: prompt,
     });
 
-    const text = response.output[0].content[0].text;
+    // ✔ SAFE access to text (fixes your error)
+    const item: any = response.output?.[0];
+    const text =
+      item?.content?.[0]?.text ||
+      "Coach could not generate a response.";
 
     return NextResponse.json({ answer: text });
   } catch (err) {

@@ -3,217 +3,260 @@
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { supabase } from "@/lib/supabaseClient";
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 
 type SessionRow = {
   id: string;
   created_at: string;
   actual_duration_minutes: number | null;
   self_rating: number | null;
-  distractions_count: number | null;
+  distractions_count?: number | null;
 };
 
-type SessionSummary = {
-  total_minutes: number;
-  session_count: number;
+type ExperimentRow = {
+  id: string;
+  name: string;
 };
 
-export default function DashboardPage() {
+type RunRow = {
+  id: string;
+  experiment_id: string;
+  condition_label: string;
+  rating: number | null;
+};
+
+type ConditionStat = {
+  experimentName: string;
+  condition: string;
+  avgRating: number;
+  runCount: number;
+};
+
+export default function CoachPage() {
   const { loading, userId } = useAuthGuard();
-  const [summary, setSummary] = useState<SessionSummary | null>(null);
-  const [recentSessions, setRecentSessions] = useState<SessionRow[]>([]);
-  const [username, setUsername] = useState<string | null>(null);
+
+  const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [experiments, setExperiments] = useState<ExperimentRow[]>([]);
+  const [runs, setRuns] = useState<RunRow[]>([]);
+
+  const [question, setQuestion] = useState(
+    "Design a 7-day deep-work protocol around my strongest times and best-performing environments."
+  );
+  const [answer, setAnswer] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!userId) return;
 
-    const fetchAll = async () => {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("username")
-        .eq("id", userId)
-        .maybeSingle();
-
-      if (profile?.username) setUsername(profile.username);
-
-      const { data, error } = await supabase
+    const fetchData = async () => {
+      const { data: sessionData } = await supabase
         .from("sessions")
-        .select("id, created_at, goal, actual_duration_minutes, self_rating")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false });
+        .select("id, created_at, actual_duration_minutes, self_rating, distractions_count")
+        .eq("user_id", userId);
 
-      if (error) {
-        console.error(error);
-        return;
-      }
+      setSessions((sessionData || []) as SessionRow[]);
 
-      if (!data) return;
+      const { data: expData } = await supabase
+        .from("experiments")
+        .select("id, name")
+        .eq("user_id", userId);
 
-      const total = data
-        .map((s) => s.actual_duration_minutes || 0)
-        .reduce((a, b) => a + b, 0);
+      setExperiments((expData || []) as ExperimentRow[]);
 
-      const count = data.length;
+      const { data: runData } = await supabase
+        .from("experiment_runs")
+        .select("id, experiment_id, condition_label, rating")
+        .eq("user_id", userId);
 
-      setSummary({
-        total_minutes: total,
-        session_count: count,
-      });
-
-      setRecentSessions(data.slice(0, 5));
+      setRuns((runData || []) as RunRow[]);
     };
 
-    fetchAll();
+    fetchData();
   }, [userId]);
 
-  if (loading) {
+  const {
+    totalMinutes,
+    totalSessions,
+    avgRating,
+    avgDistractions,
+    topConditions,
+  } = useMemo(() => {
+    const totalMinutes = sessions.reduce(
+      (acc, s) => acc + (s.actual_duration_minutes || 0),
+      0
+    );
+    const totalSessions = sessions.length;
+
+    const ratingValues = sessions
+      .map((s) => s.self_rating)
+      .filter((x): x is number => x != null);
+
+    const avgRating =
+      ratingValues.length > 0
+        ? Math.round((ratingValues.reduce((a, b) => a + b) / ratingValues.length) * 10) /
+          10
+        : null;
+
+    const distValues = sessions
+      .map((s) => s.distractions_count ?? null)
+      .filter((x): x is number => x != null);
+
+    const avgDistractions =
+      distValues.length > 0
+        ? Math.round((distValues.reduce((a, b) => a + b) / distValues.length) * 10) /
+          10
+        : null;
+
+    const expMap = new Map(experiments.map((e) => [e.id, e]));
+
+    const agg: Record<
+      string,
+      { expId: string; condition: string; sum: number; count: number }
+    > = {};
+
+    for (const r of runs) {
+      if (r.rating == null) continue;
+
+      const key = `${r.experiment_id}::${r.condition_label}`;
+      if (!agg[key]) {
+        agg[key] = {
+          expId: r.experiment_id,
+          condition: r.condition_label,
+          sum: 0,
+          count: 0,
+        };
+      }
+
+      agg[key].sum += r.rating;
+      agg[key].count += 1;
+    }
+
+    const conditionStats: ConditionStat[] = Object.values(agg)
+      .map((e) => ({
+        experimentName: expMap.get(e.expId)?.name || "Unknown experiment",
+        condition: e.condition,
+        avgRating: Math.round((e.sum / e.count) * 10) / 10,
+        runCount: e.count,
+      }))
+      .sort((a, b) => b.avgRating - a.avgRating)
+      .slice(0, 3);
+
+    return {
+      totalMinutes,
+      totalSessions,
+      avgRating,
+      avgDistractions,
+      topConditions: conditionStats,
+    };
+  }, [sessions, experiments, runs]);
+
+  const statsSummary = useMemo(() => {
+    const base = [
+      `Total sessions: ${totalSessions}`,
+      `Total focus minutes: ${totalMinutes}`,
+      `Average focus rating: ${avgRating ?? "n/a"}`,
+      `Average distractions per session: ${avgDistractions ?? "n/a"}`,
+    ];
+
+    if (topConditions.length === 0) {
+      base.push(
+        "No experiment runs yet — Coach should suggest what to test."
+      );
+    } else {
+      base.push("Top experiment conditions:");
+      topConditions.forEach((c) =>
+        base.push(
+          `- ${c.condition} (${c.avgRating}/10 over ${c.runCount} runs) in "${c.experimentName}"`
+        )
+      );
+    }
+
+    return base.join("\n");
+  }, [totalSessions, totalMinutes, avgRating, avgDistractions, topConditions]);
+
+  const askCoach = async () => {
+    setAsking(true);
+    setErrorMsg(null);
+    setAnswer(null);
+
+    try {
+      const res = await fetch("/api/coach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, statsSummary }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error);
+
+      setAnswer(data.answer);
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  if (loading)
     return (
       <main className="min-h-screen flex items-center justify-center">
-        <p className="text-zinc-400 text-sm">Checking focus lab status…</p>
+        <p className="text-zinc-400 text-sm">Loading coach…</p>
       </main>
     );
-  }
 
   return (
     <main className="min-h-screen px-4 py-8">
       <div className="max-w-5xl mx-auto space-y-8">
-        <header className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-semibold">
-              {username ? `Hey, ${username}.` : "Dashboard"}
-            </h1>
-            <p className="text-zinc-400 text-sm">
-              Every block you run turns into data for your own focus experiment.
-            </p>
-          </div>
+        <h1 className="text-3xl font-semibold">FOKUS Coach</h1>
 
-          {/* 🔥 REPLACED NAV BLOCK BELOW */}
-          <div className="flex items-center gap-3 text-xs">
-            <Link
-              href="/insights"
-              className="px-4 py-2 rounded-full border border-zinc-700 text-zinc-200 hover:border-fokusAccentSoft hover:text-fokusAccentSoft"
-            >
-              Insights
-            </Link>
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 space-y-3 text-sm">
+          <h2 className="text-base font-semibold">Your current baseline</h2>
+          <p className="text-zinc-300">
+            Sessions: {totalSessions} • Total minutes: {totalMinutes}
+          </p>
+          <p className="text-zinc-300">
+            Avg rating: {avgRating ?? "n/a"} • Avg distractions:
+            {" "}{avgDistractions ?? "n/a"}
+          </p>
 
-            <Link
-              href="/lab"
-              className="px-4 py-2 rounded-full border border-zinc-700 text-zinc-200 hover:border-fokusAccentSoft hover:text-fokusAccentSoft"
-            >
-              Lab mode
-            </Link>
-
-            <Link
-              href="/coach"
-              className="px-4 py-2 rounded-full border border-zinc-700 text-zinc-200 hover:border-fokusAccentSoft hover:text-fokusAccentSoft"
-            >
-              FOKUS Coach
-            </Link>
-
-            <button
-              onClick={async () => {
-                await supabase.auth.signOut();
-                window.location.href = "/";
-              }}
-              className="text-zinc-400 hover:text-zinc-100"
-            >
-              Sign out
-            </button>
-          </div>
-          {/* 🔥 END NAV BLOCK */}
-        </header>
-
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
-            <h2 className="text-xs text-zinc-400 uppercase tracking-wide">
-              Total focused
-            </h2>
-            <p className="mt-2 text-3xl font-semibold">
-              {summary ? summary.total_minutes : 0}
-              <span className="text-base text-zinc-400 ml-1">min</span>
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
-            <h2 className="text-xs text-zinc-400 uppercase tracking-wide">
-              Sessions run
-            </h2>
-            <p className="mt-2 text-3xl font-semibold">
-              {summary ? summary.session_count : 0}
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
-            <h2 className="text-xs text-zinc-400 uppercase tracking-wide">
-              Deep work mode
-            </h2>
-            <p className="mt-2 text-lg text-zinc-200">
-              Ready
-              <span className="ml-2 inline-block h-2 w-2 rounded-full bg-fokusAccent" />
-            </p>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-zinc-800 bg-gradient-to-br from-zinc-900/60 to-zinc-900/20 p-6 flex flex-col md:flex-row items-center justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-semibold">Start a FOKUS session</h2>
-            <p className="text-zinc-400 text-sm mt-1">
-              Define a goal, pick your intensity, and drop into full-screen
-              lock-in mode.
-            </p>
-          </div>
-          <Link
-            href="/session"
-            className="px-6 py-3 rounded-full bg-fokusAccent text-black font-medium hover:bg-orange-500 whitespace-nowrap"
-          >
-            Launch Session Architect
-          </Link>
-        </section>
-
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Recent sessions</h2>
-            <p className="text-xs text-zinc-500">
-              Last {recentSessions.length} blocks
-            </p>
-          </div>
-
-          {recentSessions.length === 0 ? (
-            <p className="text-sm text-zinc-400">
-              No sessions yet. Start one above and come back after your first
-              block.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {recentSessions.map((s) => (
-                <div
-                  key={s.id}
-                  className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-950/60 px-4 py-3 text-sm"
-                >
-                  <div className="flex-1">
-                    <p className="font-medium text-zinc-100 truncate">
-                      {s.goal || "Unnamed focus block"}
-                    </p>
-                    <p className="text-[11px] text-zinc-500">
-                      {new Date(s.created_at).toLocaleString()}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-4 ml-4">
-                    <div className="text-right">
-                      <p className="text-xs text-zinc-400">Duration</p>
-                      <p className="text-sm font-semibold">
-                        {s.actual_duration_minutes ?? 0} min
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-zinc-400">Rating</p>
-                      <p className="text-sm font-semibold">
-                        {s.self_rating ?? "-"}
-                      </p>
-                    </div>
-                  </div>
-                </div>
+          {topConditions.length > 0 && (
+            <div className="mt-2">
+              <p className="text-xs text-zinc-400">
+                Top Lab conditions:
+              </p>
+              {topConditions.map((c, i) => (
+                <p key={i} className="text-xs text-zinc-300">
+                  • {c.condition} ({c.avgRating}/10, {c.runCount} runs)
+                </p>
               ))}
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 space-y-4">
+          <textarea
+            className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-sm"
+            rows={3}
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+          />
+
+          {errorMsg && (
+            <p className="text-xs text-red-400">{errorMsg}</p>
+          )}
+
+          <button
+            onClick={askCoach}
+            disabled={asking}
+            className="px-6 py-2 rounded-full bg-fokusAccent text-black text-sm font-medium hover:bg-orange-500"
+          >
+            {asking ? "Thinking…" : "Ask Coach"}
+          </button>
+
+          {answer && (
+            <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 text-sm whitespace-pre-wrap">
+              {answer}
             </div>
           )}
         </section>
