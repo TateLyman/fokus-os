@@ -46,32 +46,17 @@ Keep it tactical and based on data.
         },
         body: JSON.stringify({
           inputs: prompt,
-          parameters: {
-            max_tokens: 300,
-            temperature: 0.6,
-          },
         }),
       }
     );
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error("HF ERROR:", errText);
-      return NextResponse.json(
-        { error: "HF model request failed." },
-        { status: 500 }
-      );
-    }
-
     const data = await response.json();
 
-    // HF router returns { generated_text: "..." }
-    const text =
-      data.generated_text ??
+    const answer =
       data[0]?.generated_text ??
       "Coach could not generate a response.";
 
-    return NextResponse.json({ answer: text });
+    return NextResponse.json({ answer });
   } catch (err) {
     console.error("Coach API error:", err);
     return NextResponse.json(
