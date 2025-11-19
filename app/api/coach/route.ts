@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 export async function POST(req: Request) {
+  console.log("KEY EXISTS?", !!process.env.OPENAI_API_KEY);
+  console.log("KEY LENGTH:", process.env.OPENAI_API_KEY?.length || "NULL");
+  console.log("ALL ENVS:", Object.keys(process.env));
+
   if (!process.env.OPENAI_API_KEY) {
     return NextResponse.json(
       { error: "OPENAI_API_KEY is not set on the server." },
       { status: 500 }
     );
   }
+
+  const client = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
 
   const { question, statsSummary } = await req.json();
 
@@ -25,22 +29,17 @@ export async function POST(req: Request) {
   const prompt = `
 You are FOKUS Coach, an AI that designs deep-work protocols.
 
-The user is running an app that logs their focus sessions and experiments.
-Here is a summary of their recent focus data and lab experiments:
-
+User focus data:
 ${statsSummary}
 
-The user is asking:
-
+Question:
 "${question}"
 
-Using concise, practical language, give them:
-- A 3–5 bullet "protocol for the next 7 days"
-- 2–3 environment recommendations (lighting, sound, time of day)
-- 2 rules to follow during each session
-
-Avoid motivational quotes. Make it tactical.
-`;
+Give:
+- Five 7-day protocol bullets
+- Two environment tweaks
+- Two session rules
+  `;
 
   try {
     const response = await client.responses.create({
@@ -48,9 +47,7 @@ Avoid motivational quotes. Make it tactical.
       input: prompt,
     });
 
-    const text = response.output_text; // <-- FIXED
-
-    return NextResponse.json({ answer: text });
+    return NextResponse.json({ answer: response.output_text });
   } catch (err) {
     console.error("Coach API error:", err);
     return NextResponse.json(
